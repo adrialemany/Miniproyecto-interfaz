@@ -1,129 +1,263 @@
+import sys
+from PyQt5.QtCore import Qt, QPointF, QRectF
+from PyQt5.QtGui import QBrush, QPen, QPainterPath
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QFormLayout,
+    QPushButton, QGraphicsView, QGraphicsScene, QGraphicsEllipseItem, QGraphicsPathItem,
+    QSpinBox, QDoubleSpinBox, QLabel, QGroupBox, QMessageBox
+)
+
+# --- Backend (se importa desde tu proyecto) ---
+sys.path.append("./..")
 from obstacle import Obstacle
 from robot import Robot
-from geom_utils import *
-from draw_utils import *
+from potentialFieldPathPlanner import PotentialFieldPathPlanner
 
-class PotentialFieldPathPlanner:
-    def __init__(self, robot, xG, yG):
-        self.set_goal_point(xG,yG)
-        self.set_robot(robot)
-        self.obstacles = []
+# ------------------ Items gráficos ------------------
+class CircleItem(QGraphicsEllipseItem):
+    def __init__(self, x, y, r, color=Qt.darkGray, filled=True):
+        super().__init__(0, 0, 2*r, 2*r)
+        self.setPos(x - r, y - r)  # posición = esquina sup-izq del bounding
+        pen = QPen(color)
+        pen.setWidth(2)
+        self.setPen(pen)
+        if filled:
+            self.setBrush(QBrush(color))
+        self.r = r
+        self.setFlag(QGraphicsEllipseItem.ItemIsMovable, True)
+        self.setFlag(QGraphicsEllipseItem.ItemSendsScenePositionChanges, True)
 
-        # setting default values
-        self.set_max_iterations(20000)
-        self.set_influence_area(80)
-        self.set_attraction_factor(1)
-        self.set_repulsion_factor(20)
+    def center(self) -> QPointF:
+        rect = self.rect()
+        return self.pos() + QPointF(rect.width()/2, rect.height()/2)
 
-    def set_goal_point(self, x, y):
-        self.goal = np.array([x, y])
-
-    def set_robot(self, robot):
-        self.robot = robot
-
-    def add_obstacle(self, obs):
-        self.obstacles.append(obs)
-
-    def _check(self, i, verb):
-        n = len(self.obstacles)
-        assert 0 <= i < n, "item " + str(i) + " cannot be " + verb + "; list has " + str(n) + " items"
-
-    def remove_obstacle(self, i):
-        self._check(i,"removed")
-        self.obstacles.pop(i)
-
-    def move_robot(self, x, y):
-        self.robot.set_position(x,y)
-
-    def resize_robot(self, size):
-        self.robot.set_size(size)
-
-    def move_obstacle(self, i, x, y):
-        # move obstacle i-th to new position (x,y)
-        self._check(i, "moved")
-        self.obstacles[i].set_position(x, y)
-
-    def resize_obstacle(self, i, size):
-        # resize obstacle i-th to new size
-        self.obstacles[i].set_size(size)
-
-    def __str__(self):
-        return str(self.robot) + "\n Goal: " + point_to_str(self.goal)
-
-    def _compute_attractive_foce(self):
-        robot_pos = self.robot.get_position()
-        d = distance(robot_pos, self.goal)
-        f_att = self.attraction_factor * unit_vector(self.goal-robot_pos)
-        return f_att, d
+    def set_center(self, x, y):
+        self.setPos(x - self.r, y - self.r)
 
 
-    def _compute_repulsive_force(self):
-        robot_pos = self.robot.get_position()
-        d0 = self.influence_area # influence area (minimum distance to obstacle for it to exert repulsion)
-        f_rep = np.array([0,0])
-        min_dist = np.inf
-        for obs in self.obstacles:
-            f_obs = unit_vector(robot_pos-obs.get_position())
-            d_obs = distance(robot_pos, obs.get_position())
-            min_dist = np.min([min_dist, d_obs])
-            if d_obs > d0:
-                f_rep_obs = np.zeros(2)
-            else:
-                f_rep_obs = self.repulsion_factor * (1/d_obs - 1/d0) * f_obs
-            f_rep = f_rep + f_rep_obs
-        return f_rep, min_dist
+class PathItem(QGraphicsPathItem):
+    def __init__(self):
+        super().__init__()
+        pen = QPen(Qt.blue)
+        pen.setWidth(2)
+        self.setPen(pen)
 
-    def set_max_iterations(self, n_max):
-        self.num_iters_max = n_max
+    def set_points(self, points):
+        if not len(points):
+            self.setPath(QPainterPath())
+            return
+        p = QPainterPath(QPointF(points[0][0], points[0][1]))
+        for x, y in points[1:]:
+            p.lineTo(x, y)
+        self.setPath(p)
 
-    def set_influence_area(self, d0):
-        self.influence_area = d0
 
-    def set_attraction_factor(self, att_factor):
-        self.attraction_factor = att_factor
+# ------------------ Vista del mundo ------------------
+class PlannerView(QGraphicsView):
+    MODE_SELECT = 0
+    MODE_SET_START = 1
+    MODE_SET_GOAL = 2
+    MODE_ADD_OBS = 3
 
-    def set_repulsion_factor(self, rep_factor):
-        self.repulsion_factor = rep_factor
+    def __init__(self, scene_rect=QRectF(0, 0, 600, 600)):
+        super().__init__()
+        self.setRenderHint(self.paintEngine().Painter.Antialiasing, True)
+        self.scene = QGraphicsScene(scene_rect)
+        self.setScene(self.scene)
+        self.setBackgroundBrush(QBrush(Qt.white))
+        self.mode = self.MODE_SELECT
 
-    def run(self):
-        d_goal = np.inf
-        close_enough = 1 # tolerance in distance to goal
-        path = []
+        # elementos
+        self.robot_item = CircleItem(50, 50, 10, Qt.darkGreen)
+        self.robot_item.setFlag(QGraphicsEllipseItem.ItemIsMovable, True)
+        self.scene.addItem(self.robot_item)
 
-        iters = 0
-        while d_goal>close_enough and iters<self.num_iters_max:
-            iters +=1
-            robot_pos = self.robot.get_position()
-            path.append(robot_pos)
-            f_att, d_goal = self._compute_attractive_foce()
-            f_rep, d_obs  = self._compute_repulsive_force()
-            #print("distance to goal", d_goal)
+        self.start_item = CircleItem(50, 50, 4, Qt.green)
+        self.start_item.setFlag(QGraphicsEllipseItem.ItemIsMovable, True)
+        self.scene.addItem(self.start_item)
 
-            #print("f_rep",f_rep)
-            #print("f_att",f_att)
-            f_total = f_att + f_rep
-            d = min(d_goal, d_obs)
-            speed = np.exp(d_goal / 100)
-            self.robot.move(f_total, speed)
-        return np.array(path)
+        self.goal_item = CircleItem(550, 550, 6, Qt.red)
+        self.goal_item.setFlag(QGraphicsEllipseItem.ItemIsMovable, True)
+        self.scene.addItem(self.goal_item)
+
+        self.path_item = PathItem()
+        self.scene.addItem(self.path_item)
+
+        self.obstacle_items = []
+
+    # --- helpers ---
+    def clear_path(self):
+        self.path_item.set_points([])
+
+    def add_obstacle_circle(self, x, y, r=15):
+        item = CircleItem(x, y, r, Qt.darkGray)
+        self.scene.addItem(item)
+        self.obstacle_items.append(item)
+        return item
+
+    # --- modos con ratón ---
+    def set_mode(self, mode):
+        self.mode = mode
+        self.clear_path()
+
+    def mousePressEvent(self, event):
+        pos = self.mapToScene(event.pos())
+        if self.mode == self.MODE_SET_START:
+            self.start_item.set_center(pos.x(), pos.y())
+        elif self.mode == self.MODE_SET_GOAL:
+            self.goal_item.set_center(pos.x(), pos.y())
+        elif self.mode == self.MODE_ADD_OBS:
+            self.add_obstacle_circle(pos.x(), pos.y(), r=15)
+        else:
+            super().mousePressEvent(event)
+
+    # extracción de datos para el backend
+    def get_robot_state(self):
+        c = self.robot_item.center()
+        return float(c.x()), float(c.y()), float(self.robot_item.r)
+
+    def get_start_state(self):
+        c = self.start_item.center()
+        return float(c.x()), float(c.y())
+
+    def get_goal_state(self):
+        c = self.goal_item.center()
+        return float(c.x()), float(c.y())
+
+    def get_obstacles(self):
+        obs = []
+        for it in self.obstacle_items:
+            c = it.center()
+            obs.append((float(c.x()), float(c.y()), float(it.r)))
+        return obs
+
+
+# ------------------ Ventana principal ------------------
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("APF Path Planner – GUI")
+        self.resize(900, 650)
+
+        # centro: vista
+        self.view = PlannerView()
+
+        # panel de control
+        controls = self._build_controls()
+
+        root = QWidget()
+        layout = QHBoxLayout(root)
+        layout.addWidget(self.view, 1)
+        layout.addWidget(controls)
+        self.setCentralWidget(root)
+
+        # backend (se inicializa al vuelo al pulsar RUN)
+        self.planner = None
+
+    # ------- UI -------
+    def _build_controls(self) -> QWidget:
+        panel = QWidget()
+        v = QVBoxLayout(panel)
+
+        # Grupo: modos
+        gb_modes = QGroupBox("Edición")
+        fm = QVBoxLayout(gb_modes)
+        btn_select = QPushButton("Seleccionar/Mover")
+        btn_start = QPushButton("Fijar START")
+        btn_goal = QPushButton("Fijar GOAL")
+        btn_obs = QPushButton("Añadir obstáculo")
+        for b in (btn_select, btn_start, btn_goal, btn_obs):
+            fm.addWidget(b)
+        v.addWidget(gb_modes)
+
+        btn_select.clicked.connect(lambda: self.view.set_mode(PlannerView.MODE_SELECT))
+        btn_start.clicked.connect(lambda: self.view.set_mode(PlannerView.MODE_SET_START))
+        btn_goal.clicked.connect(lambda: self.view.set_mode(PlannerView.MODE_SET_GOAL))
+        btn_obs.clicked.connect(lambda: self.view.set_mode(PlannerView.MODE_ADD_OBS))
+
+        # Grupo: parámetros
+        gb_params = QGroupBox("Parámetros APF")
+        fp = QFormLayout(gb_params)
+
+        self.sp_iters = QSpinBox(); self.sp_iters.setRange(1, 200000); self.sp_iters.setValue(20000)
+        self.sp_infl  = QSpinBox(); self.sp_infl.setRange(1, 500); self.sp_infl.setValue(80)
+        self.sp_att   = QDoubleSpinBox(); self.sp_att.setDecimals(3); self.sp_att.setRange(0.001, 1000.0); self.sp_att.setValue(1.0)
+        self.sp_rep   = QDoubleSpinBox(); self.sp_rep.setDecimals(3); self.sp_rep.setRange(0.001, 5000.0); self.sp_rep.setValue(20.0)
+        self.sp_rbot  = QSpinBox(); self.sp_rbot.setRange(1, 100); self.sp_rbot.setValue(10)
+
+        fp.addRow("Iteraciones máx.", self.sp_iters)
+        fp.addRow("Área influencia (d0)", self.sp_infl)
+        fp.addRow("Factor atracción", self.sp_att)
+        fp.addRow("Factor repulsión", self.sp_rep)
+        fp.addRow("Radio robot", self.sp_rbot)
+        v.addWidget(gb_params)
+
+        # Acciones
+        btn_run = QPushButton("▶ Ejecutar planner")
+        btn_clear_path = QPushButton("Borrar trayectoria")
+        btn_clear_obs = QPushButton("Borrar obstáculos")
+        v.addWidget(btn_run)
+        v.addWidget(btn_clear_path)
+        v.addWidget(btn_clear_obs)
+
+        btn_run.clicked.connect(self.on_run)
+        btn_clear_path.clicked.connect(lambda: self.view.clear_path())
+        btn_clear_obs.clicked.connect(self.on_clear_obstacles)
+
+        v.addStretch(1)
+        v.addWidget(QLabel("Consejo: usa los botones de ‘Edición’ y arrastra los círculos."))
+        return panel
+
+    # ------- lógica -------
+    def on_clear_obstacles(self):
+        for it in self.view.obstacle_items:
+            self.view.scene.removeItem(it)
+        self.view.obstacle_items.clear()
+        self.view.clear_path()
+
+    def build_backend(self):
+        # estados desde la vista
+        sx, sy = self.view.get_start_state()
+        gx, gy = self.view.get_goal_state()
+        rx, ry, rr = self.view.get_robot_state()
+
+        # Robot del backend
+        robot = Robot(rx, ry, rr, "turtle")
+        planner = PotentialFieldPathPlanner(robot, gx, gy)
+
+        # parámetros
+        planner.set_max_iterations(self.sp_iters.value())
+        planner.set_influence_area(self.sp_infl.value())
+        planner.set_attraction_factor(self.sp_att.value())
+        planner.set_repulsion_factor(self.sp_rep.value())
+
+        # obstáculos
+        for x, y, r in self.view.get_obstacles():
+            planner.add_obstacle(Obstacle(x, y, r))
+        return planner
+
+    def sync_robot_radius(self):
+        # sincroniza el radio visual con el numérico antes de ejecutar
+        _, _, rr = self.view.get_robot_state()
+        new_r = self.sp_rbot.value()
+        if abs(new_r - rr) > 1e-6:
+            c = self.view.robot_item.center()
+            self.view.scene.removeItem(self.view.robot_item)
+            self.view.robot_item = CircleItem(c.x(), c.y(), new_r, Qt.darkGreen)
+            self.view.scene.addItem(self.view.robot_item)
+
+    def on_run(self):
+        try:
+            self.sync_robot_radius()
+            self.planner = self.build_backend()
+            path = self.planner.run()  # numpy array N x 2
+            self.view.path_item.set_points(path.tolist())
+        except Exception as e:
+            QMessageBox.critical(self, "Error ejecutando el planner", str(e))
 
 
 if __name__ == "__main__":
-    robot = Robot(0, 0, 5, "turtle")
-    pfpp = PotentialFieldPathPlanner(robot, 100, 100)
-
-    pfpp.add_obstacle(Obstacle(20,30,10))
-    pfpp.add_obstacle(Obstacle(10,80,25))
-    pfpp.add_obstacle(Obstacle(70,60,15))
-    pfpp.add_obstacle(Obstacle(80,90,20))
-    pfpp.add_obstacle(Obstacle(80,20,20))
-
-    #pfpp.remove_obstacle(1)
-
-    pfpp.move_obstacle(0,20,30)
-    pfpp.resize_obstacle(1,0.1)
-
-    print("planner state:\n", pfpp)
-    path = pfpp.run()
-    draw_path(path)
-
+    app = QApplication(sys.argv)
+    w = MainWindow()
+    w.show()
+    sys.exit(app.exec_())
