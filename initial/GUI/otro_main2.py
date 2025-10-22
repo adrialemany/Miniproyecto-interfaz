@@ -2,6 +2,8 @@
 import os, sys
 from pathlib import Path
 from PyQt5 import QtCore, QtGui, QtWidgets
+# arriba del todo
+from otro_planner import PlannerPanel
 
 GOAL_SIZE = QtCore.QSize(50, 50)  # Ajusta el tamaño de la bandera
 
@@ -305,22 +307,23 @@ class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         MainWindow.resize(1020, 640)
         self.centralwidget = QtWidgets.QWidget(MainWindow)
-        root = QtWidgets.QVBoxLayout(self.centralwidget); root.setContentsMargins(12,12,12,12); root.setSpacing(10)
+        root = QtWidgets.QVBoxLayout(self.centralwidget)
+        root.setContentsMargins(12,12,12,12); root.setSpacing(10)
 
         # --- fila superior (3 bloques) ---
         h_top = QtWidgets.QHBoxLayout(); h_top.setSpacing(10); root.addLayout(h_top)
 
-        # Bloque 1
+        # Bloque 1: fuente de obstáculos
         self.frame_add = QtWidgets.QFrame(); self.frame_add.setObjectName("frame_add")
         self.frame_add.setStyleSheet("QFrame#frame_add{border:2px solid #444;border-radius:14px;background:#f7f7f7;}")
-        self.frame_add.setMinimumWidth(320)
+        self.frame_add.setMinimumWidth(100)
         lay_add = QtWidgets.QHBoxLayout(self.frame_add); lay_add.setContentsMargins(16,8,16,8); lay_add.setSpacing(10)
         lb = QtWidgets.QLabel("Añadir obstáculo:"); f=lb.font(); f.setPointSize(11); f.setBold(True); lb.setFont(f)
         self.icon_src = ObstacleSource()
         lay_add.addWidget(lb,1); lay_add.addWidget(self.icon_src,0,QtCore.Qt.AlignRight|QtCore.Qt.AlignVCenter)
         h_top.addWidget(self.frame_add, 0)
 
-        # Bloque 2 (info)
+        # Bloque 2: info
         self.frame_info = QtWidgets.QFrame(); self.frame_info.setObjectName("frame_info")
         self.frame_info.setStyleSheet("QFrame#frame_info{border:2px solid #444;border-radius:14px;background:#f7f7f7;}")
         lay_info = QtWidgets.QHBoxLayout(self.frame_info); lay_info.setContentsMargins(16,8,16,8)
@@ -329,34 +332,36 @@ class Ui_MainWindow(object):
         lay_info.addWidget(self.lb_info,1)
         h_top.addWidget(self.frame_info, 1)
 
-        # Bloque 3 (play)
+        # Bloque 3: Play
         self.frame_play = QtWidgets.QFrame(); self.frame_play.setObjectName("frame_play")
         lay_play = QtWidgets.QHBoxLayout(self.frame_play)
         self.bt_play = PlayButton(); lay_play.addWidget(self.bt_play,0,QtCore.Qt.AlignCenter)
         h_top.addWidget(self.frame_play, 0)
 
-        # --- zona media: mapa a la izquierda + columna derecha reservada ---
+        # --- zona media: mapa (izda) + panel planner (dcha) ---
         h_mid = QtWidgets.QHBoxLayout(); h_mid.setSpacing(10)
         root.addLayout(h_mid, 1)
 
-        # Mapa
-        map_frame = QtWidgets.QFrame(); map_frame.setStyleSheet("QFrame{border:2px solid #444;border-radius:14px;}")
+        # Mapa (izquierda)
+        map_frame = QtWidgets.QFrame()
+        map_frame.setStyleSheet("QFrame{border:2px solid #444;border-radius:14px;}")
         lay_map = QtWidgets.QVBoxLayout(map_frame); lay_map.setContentsMargins(8,8,8,8)
         self.view = MapView(self._set_info)
         lay_map.addWidget(self.view)
-        h_mid.addWidget(map_frame, 3)  # ocupa ~2/3
+        h_mid.addWidget(map_frame, 3)  # ~2/3 del ancho
 
-        # Columna derecha reservada
-        right_frame = QtWidgets.QFrame()
-        right_frame.setStyleSheet("QFrame{border:2px dashed #bbb;border-radius:14px;background:#fcfcfc;}")
-        right_layout = QtWidgets.QVBoxLayout(right_frame); right_layout.addStretch(1)
-        h_mid.addWidget(right_frame, 1)  # ~1/3
+        # Panel planner (derecha)
+        self.planner_panel = PlannerPanel(self.view, self._set_info)
+        h_mid.addWidget(self.planner_panel, 1)
 
         MainWindow.setCentralWidget(self.centralwidget)
         self.bt_play.clicked.connect(lambda: print("!En marcha!"))
+        self.bt_play.clicked.connect(self.planner_panel.on_play)
         self._set_info("Pasa el ratón sobre robot/obstáculos. Arrastra el icono para añadir uno nuevo.")
 
-    def _set_info(self, text): self.lb_info.setText(text)
+    def _set_info(self, text):
+        self.lb_info.setText(text)
+
 
 # -------- main --------
 if __name__ == "__main__":
