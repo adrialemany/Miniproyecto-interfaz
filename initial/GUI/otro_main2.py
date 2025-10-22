@@ -5,16 +5,14 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 # arriba del todo
 from otro_planner import PlannerPanel
 
-GOAL_SIZE = QtCore.QSize(50, 50)  # Ajusta el tamaño de la bandera
+GOAL_SIZE = QtCore.QSize(50, 50)
 
-# -------- util --------
 def point_to_str(p: QtCore.QPointF):
     return f"({int(p.x())}, {int(p.y())})"
 
 def clamp(val, lo, hi):
     return max(lo, min(hi, val))
 
-# -------- items con hover y límites --------
 class BoundedEllipseItem(QtWidgets.QGraphicsEllipseItem):
     """
     Círculo movible con hover y 'clamp' a los límites de la escena.
@@ -32,7 +30,7 @@ class BoundedEllipseItem(QtWidgets.QGraphicsEllipseItem):
         self.setPen(pen)
         self.setBrush(QtGui.QBrush(color))
         self.setFlag(QtWidgets.QGraphicsItem.ItemIsMovable, True)
-        self.setFlag(QtWidgets.QGraphicsItem.ItemSendsGeometryChanges, True)  # <- necesario para clamping
+        self.setFlag(QtWidgets.QGraphicsItem.ItemSendsGeometryChanges, True)
         self.setAcceptHoverEvents(True)
 
     def center(self):
@@ -46,12 +44,10 @@ class BoundedEllipseItem(QtWidgets.QGraphicsEllipseItem):
     def hoverEnterEvent(self, e):  self.setOpacity(0.9)
     def hoverLeaveEvent(self, e):  self.setOpacity(1.0)
 
-    # Limitar al rectángulo visible de la escena
     def itemChange(self, change, value):
         if change == QtWidgets.QGraphicsItem.ItemPositionChange and self.scene():
             new_pos = value
             rect = self.scene().sceneRect()
-            # Mantener todo el círculo dentro: la posición del item es la esquina sup-izq del bounding
             x = clamp(new_pos.x(), rect.left(), rect.right() - self.rect().width())
             y = clamp(new_pos.y(), rect.top(),  rect.bottom() - self.rect().height())
             return QtCore.QPointF(x, y)
@@ -88,7 +84,6 @@ class GoalFlagItem(QtWidgets.QGraphicsPixmapItem):
             return QtCore.QPointF(x, y)
         return super().itemChange(change, value)
 
-# -------- vista del mapa con drop de obstáculos --------
 class MapView(QtWidgets.QGraphicsView):
     def __init__(self, info_cb):
         super().__init__()
@@ -100,9 +95,6 @@ class MapView(QtWidgets.QGraphicsView):
         self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
 
-
-
-        # Escena: el rectángulo de la escena ES el área de trabajo
         self.scene = QtWidgets.QGraphicsScene(0, 0, 680, 520)
         self.setScene(self.scene)
 
@@ -110,14 +102,11 @@ class MapView(QtWidgets.QGraphicsView):
         self.obstacle_count = 0
         self.obstacle_items = []
 
-        # Robot por defecto
         self.robot = BoundedEllipseItem(80, 80, 14, QtCore.Qt.darkGreen, "Robot", self.info_cb)
         self.scene.addItem(self.robot)
 
-        # Bandera de meta
         flag_pm = self._load_flag_pixmap()
         self.flag = GoalFlagItem(flag_pm, self.info_cb, name="Meta")
-        # posición inicial: esquina sup-der con margen
         self.flag.setPos(self.scene.sceneRect().right() - flag_pm.width() - 16, 16)
         self.scene.addItem(self.flag)
 
@@ -129,10 +118,8 @@ class MapView(QtWidgets.QGraphicsView):
             if c.exists():
                 pm = QtGui.QPixmap(str(c))
                 if not pm.isNull():
-                    # Escalado de la imagen de meta
                     return pm.scaled(GOAL_SIZE, QtCore.Qt.KeepAspectRatio,
                                      QtCore.Qt.SmoothTransformation)
-        # Fallback dibujando banderita ya con ese tamaño
         pm = QtGui.QPixmap(GOAL_SIZE); pm.fill(QtCore.Qt.transparent)
         p = QtGui.QPainter(pm); p.setRenderHint(QtGui.QPainter.Antialiasing, True)
         pen = QtGui.QPen(QtCore.Qt.black, 2); p.setPen(pen)
@@ -146,10 +133,8 @@ class MapView(QtWidgets.QGraphicsView):
         p.end()
         return pm
 
-    # Crear obstáculo respetando límites
     def _add_obstacle_at(self, scene_pos: QtCore.QPointF, radius=16):
         r = self.scene.sceneRect()
-        # clamp al centro para que el círculo no se salga
         cx = clamp(scene_pos.x(), r.left()+radius, r.right()-radius)
         cy = clamp(scene_pos.y(), r.top()+radius,  r.bottom()-radius)
         self.obstacle_count += 1
@@ -159,7 +144,6 @@ class MapView(QtWidgets.QGraphicsView):
         self.obstacle_items.append(item)
         self.info_cb(f"Añadido: {name} en {point_to_str(item.center())}")
 
-    # Drag desde el icono (acepta y clampa en tiempo real)
     def dragEnterEvent(self, e):
         if e.mimeData().hasFormat("application/x-obstacle"):
             e.acceptProposedAction()
@@ -181,7 +165,6 @@ class MapView(QtWidgets.QGraphicsView):
         if not e.mimeData().hasFormat("application/x-obstacle"):
             e.ignore(); return
         sp = self.mapToScene(e.pos())
-        # Siempre clampa dentro antes de crear
         self._add_obstacle_at(sp)
         e.acceptProposedAction()
 
@@ -189,12 +172,10 @@ class MapView(QtWidgets.QGraphicsView):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        # nuevo rectángulo de escena: ocupa todo el viewport
         w = max(100, self.viewport().width())
         h = max(100, self.viewport().height())
         self.scene.setSceneRect(0, 0, w, h)
 
-    # re-clamp de todos los items existentes al nuevo tamaño
         def reclamp(item):
             r = self.scene.sceneRect()
             br = item.boundingRect()
@@ -207,8 +188,6 @@ class MapView(QtWidgets.QGraphicsView):
         for it in self.obstacle_items:
             reclamp(it)
 
-
-# -------- icono fuente de obstáculos --------
 class ObstacleSource(QtWidgets.QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -251,7 +230,6 @@ class ObstacleSource(QtWidgets.QLabel):
     def mouseReleaseEvent(self, e):
         self.setCursor(QtCore.Qt.OpenHandCursor)
 
-# -------- botón play (solo PNG, sin contorno; pequeño y se oscurece al pulsar) --------
 class PlayButton(QtWidgets.QPushButton):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -263,9 +241,7 @@ class PlayButton(QtWidgets.QPushButton):
         base = Path(__file__).resolve().parent
         png_path = base / "images" / "play.png"
 
-        # === AJUSTA AQUÍ EL TAMAÑO MÁXIMO DEL ICONO (en píxeles) ===
-        TARGET_PX = 70   # pon 24–36 según quieras más pequeño o grande
-        # ============================================================
+        TARGET_PX = 70
 
         self._pm_normal = None
         self._pm_pressed = None
@@ -276,7 +252,7 @@ class PlayButton(QtWidgets.QPushButton):
                                     QtCore.Qt.KeepAspectRatio,
                                     QtCore.Qt.SmoothTransformation)
             self._pm_normal  = small
-            self._pm_pressed = self._darken(small, 0.75)  # oscurecer al pulsar
+            self._pm_pressed = self._darken(small, 0.75)
 
             self.setIcon(QtGui.QIcon(self._pm_normal))
             self.setIconSize(self._pm_normal.size())
@@ -302,7 +278,6 @@ class PlayButton(QtWidgets.QPushButton):
         if self._pm_normal:
             self.setIcon(QtGui.QIcon(self._pm_pressed if pressed else self._pm_normal))
 
-# -------- UI estilo Qt Designer --------
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         MainWindow.resize(1020, 640)
@@ -310,10 +285,12 @@ class Ui_MainWindow(object):
         root = QtWidgets.QVBoxLayout(self.centralwidget)
         root.setContentsMargins(12,12,12,12); root.setSpacing(10)
 
-        # --- fila superior (3 bloques) ---
         h_top = QtWidgets.QHBoxLayout(); h_top.setSpacing(10); root.addLayout(h_top)
 
+<<<<<<< HEAD
         # Bloque 1: fuente de obstáculos
+=======
+>>>>>>> 6cc3677efaf0305b3e76cae9089fb0187cd6fa5a
         self.frame_add = QtWidgets.QFrame(); self.frame_add.setObjectName("frame_add")
         self.frame_add.setStyleSheet("QFrame#frame_add{border:2px solid #444;border-radius:14px;background:#f7f7f7;}")
         self.frame_add.setMinimumWidth(100)
@@ -323,7 +300,10 @@ class Ui_MainWindow(object):
         lay_add.addWidget(lb,1); lay_add.addWidget(self.icon_src,0,QtCore.Qt.AlignRight|QtCore.Qt.AlignVCenter)
         h_top.addWidget(self.frame_add, 0)
 
+<<<<<<< HEAD
         # Bloque 2: info
+=======
+>>>>>>> 6cc3677efaf0305b3e76cae9089fb0187cd6fa5a
         self.frame_info = QtWidgets.QFrame(); self.frame_info.setObjectName("frame_info")
         self.frame_info.setStyleSheet("QFrame#frame_info{border:2px solid #444;border-radius:14px;background:#f7f7f7;}")
         lay_info = QtWidgets.QHBoxLayout(self.frame_info); lay_info.setContentsMargins(16,8,16,8)
@@ -332,12 +312,16 @@ class Ui_MainWindow(object):
         lay_info.addWidget(self.lb_info,1)
         h_top.addWidget(self.frame_info, 1)
 
+<<<<<<< HEAD
         # Bloque 3: Play
+=======
+>>>>>>> 6cc3677efaf0305b3e76cae9089fb0187cd6fa5a
         self.frame_play = QtWidgets.QFrame(); self.frame_play.setObjectName("frame_play")
         lay_play = QtWidgets.QHBoxLayout(self.frame_play)
         self.bt_play = PlayButton(); lay_play.addWidget(self.bt_play,0,QtCore.Qt.AlignCenter)
         h_top.addWidget(self.frame_play, 0)
 
+<<<<<<< HEAD
         # --- zona media: mapa (izda) + panel planner (dcha) ---
         h_mid = QtWidgets.QHBoxLayout(); h_mid.setSpacing(10)
         root.addLayout(h_mid, 1)
@@ -353,6 +337,21 @@ class Ui_MainWindow(object):
         # Panel planner (derecha)
         self.planner_panel = PlannerPanel(self.view, self._set_info)
         h_mid.addWidget(self.planner_panel, 1)
+=======
+        h_mid = QtWidgets.QHBoxLayout(); h_mid.setSpacing(10)
+        root.addLayout(h_mid, 1)
+
+        map_frame = QtWidgets.QFrame(); map_frame.setStyleSheet("QFrame{border:2px solid #444;border-radius:14px;}")
+        lay_map = QtWidgets.QVBoxLayout(map_frame); lay_map.setContentsMargins(8,8,8,8)
+        self.view = MapView(self._set_info)
+        lay_map.addWidget(self.view)
+        h_mid.addWidget(map_frame, 3)
+
+        right_frame = QtWidgets.QFrame()
+        right_frame.setStyleSheet("QFrame{border:2px dashed #bbb;border-radius:14px;background:#fcfcfc;}")
+        right_layout = QtWidgets.QVBoxLayout(right_frame); right_layout.addStretch(1)
+        h_mid.addWidget(right_frame, 1)  # ~1/3
+>>>>>>> 6cc3677efaf0305b3e76cae9089fb0187cd6fa5a
 
         MainWindow.setCentralWidget(self.centralwidget)
         self.bt_play.clicked.connect(lambda: print("!En marcha!"))
@@ -363,7 +362,6 @@ class Ui_MainWindow(object):
         self.lb_info.setText(text)
 
 
-# -------- main --------
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     w = QtWidgets.QMainWindow()
