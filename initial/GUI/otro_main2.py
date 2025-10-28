@@ -2,7 +2,8 @@
 import os, sys
 from pathlib import Path
 from PyQt5 import QtCore, QtGui, QtWidgets
-from otro_planner import PlannerPanel 
+from otro_planner import PlannerPanel
+from objectDialog import ObjectDialog
 
 # -------- Constantes de Estilo (del script 2) --------
 COLOR_BG_DARKER = "#212121"
@@ -113,6 +114,10 @@ class BoundedEllipseItem(QtWidgets.QGraphicsEllipseItem):
         self._r = r
         self._name = name
         self._info_cb = info_cb
+
+        self._resizing = False
+        self._resize_margin = 8  # sensibilidad de detección del borde
+
         self.setPos(cx - r, cy - r)
         pen = QtGui.QPen(color); pen.setWidth(2)
         self.setPen(pen)
@@ -126,11 +131,45 @@ class BoundedEllipseItem(QtWidgets.QGraphicsEllipseItem):
 
     def hoverMoveEvent(self, e):
         c = self.center()
+        p = e.pos()
+        dist_to_border = abs((p - self.rect().center()).manhattanLength() - self.rect().width() / 2)
+        if dist_to_border < self._resize_margin:
+            self.setCursor(QtCore.Qt.SizeFDiagCursor)
+        else:
+            self.setCursor(QtCore.Qt.OpenHandCursor)
+
         if self._info_cb:
             self._info_cb(f"{self._name} en {point_to_str(c)}")
 
     def hoverEnterEvent(self, e): self.setOpacity(0.9)
     def hoverLeaveEvent(self, e): self.setOpacity(1.0)
+
+    def mousePressEvent(self, e):
+        # Solo se puede redimensionar si NO es el robot
+        if getattr(self, "_name", "").lower() != "robot":
+            if e.button() == QtCore.Qt.LeftButton and self.cursor().shape() == QtCore.Qt.SizeFDiagCursor:
+                self._resizing = True
+                self._resize_origin = e.pos()
+                e.accept()
+                return
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self._resizing:
+            delta = e.pos() - self._resize_origin
+            # Ajusta sensibilidad aquí ↓
+            new_r = min(150, max(5, self._r + delta.x() / 150))
+            self.prepareGeometryChange()
+            self.setRect(0, 0, 2 * new_r, 2 * new_r)
+            self._r = new_r
+            e.accept()
+        else:
+            super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if self._resizing:
+            self._resizing = False
+        super().mouseReleaseEvent(e)
 
     def itemChange(self, change, value):
         if change == QtWidgets.QGraphicsItem.ItemPositionChange and self.scene():
@@ -300,6 +339,25 @@ class MapView(QtWidgets.QGraphicsView):
         reclamp(self.flag)
         for it in self.obstacle_items:
             reclamp(it)
+
+    def mousePressEvent(self, e):
+        sp = self.mapToScene(e.pos())
+        if e.button() == QtCore.Qt.RightButton:
+            item = self.scene.itemAt(sp, QtGui.QTransform())
+            if isinstance(item, BoundedEllipseItem):
+                dlg = ObjectDialog(item, parent=self, delete_callback=self._on_item_deleted)
+                if dlg.exec_():
+                    dlg.apply_changes()
+                    self.info_cb(f"{item._name} actualizado → radio {item._r}, posición {point_to_str(item.center())}")
+        else:
+            super().mousePressEvent(e)
+
+    def _on_item_deleted(self, item):
+        """Callback cuando se elimina un objeto desde el diálogo."""
+        if item in self.obstacle_items:
+            self.scene.removeItem(item)
+            self.obstacle_items.remove(item)
+        self.info_cb(f"{item._name} eliminado.")
 
 # -------- icono fuente de obstáculos --------
 class ObstacleSource(QtWidgets.QLabel):
